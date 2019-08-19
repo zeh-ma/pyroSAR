@@ -6,31 +6,31 @@ by pyroSAR for ingestion into an Open Data Cube.
 
     from pyroSAR.datacube_util import Product, Dataset
     from pyroSAR.ancillary import find_datasets
-    
+
     # find pyroSAR files by metadata attributes
     archive_s1 = '/.../sentinel1/GRD/processed'
     scenes_s1 = find_datasets(archive_s1, sensor=('S1A', 'S1B'), acquisition_mode='IW')
-    
+
     # define the polarization units describing the data sets
     units = {'VV': 'backscatter VV', 'VH': 'backscatter VH'}
-    
+
     # create a new product
     with Product(name='S1_GRD_index',
                  product_type='gamma0',
                  description='Gamma Naught RTC backscatter') as prod:
-        
+
         for dataset in scenes_s1:
             with Dataset(dataset, units=units) as ds:
-                
+
                 # add the dataset to the product
                 prod.add(ds)
-                
+
                 # parse datacube indexing YMLs from product and data set metadata
                 prod.export_indexing_yml(ds, 'yml_index_outdir')
-        
+
         # write the product YML
         prod.write('yml_product')
-        
+
         # print the product metadata which is written to the product YML
         print(prod)
 """
@@ -41,14 +41,14 @@ import yaml
 import uuid
 from time import strftime, strptime
 from spatialist.raster import Raster, Dtype
-from spatialist.ancillary import union
+from spatialist.ancillary import union, finder
 from .ancillary import parse_datasetname
 
 
 class Dataset(object):
     """
     A general class describing dataset information required for creating ODC YML files
-    
+
     Parameters
     ----------
     filename: str, list, Dataset
@@ -58,15 +58,15 @@ class Dataset(object):
         the units of the product measurement
     """
     def __init__(self, filename, units='DN'):
-        
+
         if isinstance(filename, list):
             combined = sum([Dataset(x, units) for x in filename])
             self.__init__(combined)
-        
+
         elif isinstance(filename, Dataset):
             for attr, value in vars(filename).items():
                 setattr(self, attr, value)
-        
+
         elif isinstance(filename, str):
             # map pyroSAR sensor identifiers to platform and instrument codes
             sensor_lookup = {'ASAR': ('ENVISAT', 'ASAR'),
@@ -78,29 +78,29 @@ class Dataset(object):
                              'S1B': ('SENTINEL-1', 'C-SAR'),
                              'TSX1': ('TERRASAR-X_1', 'SAR'),
                              'TDX1': ('TANDEM-X_1', 'SAR')}
-            
+
             # extract basic metadata attributes from the filename and register them to the object
             meta = parse_datasetname(filename)
-            
+
             if meta is None:
                 raise ValueError('could not identify dataset: {}'.format(filename))
-            
+
             for key, val in meta.items():
                 setattr(self, key, val)
-            
+
             # define acquisition start and end time; Currently both are set to the acquisition start time,
             # which is contained in the filename
             # Time will only be correct if the full scene was processed, start and end time of s subset will
             # differ. Thus, accurately setting both is not seen as too relevant.
             self.from_dt = strftime('%Y-%m-%dT%H:%M:%S', strptime(self.start, '%Y%m%dT%H%M%S'))
             self.to_dt = strftime('%Y-%m-%dT%H:%M:%S', strptime(self.start, '%Y%m%dT%H%M%S'))
-            
+
             # match the sensor ID from the filename to a platform and instrument
             if self.sensor not in sensor_lookup.keys():
                 raise ValueError('unknown sensor: {}'.format(self.sensor))
-            
+
             self.platform, self.instrument = sensor_lookup[self.sensor]
-            
+
             # extract general geo metadata from the GTiff information
             with Raster(filename) as ras:
                 self.dtype = Dtype(ras.dtype).numpystr
@@ -114,16 +114,16 @@ class Dataset(object):
                 with ras.bbox() as bbox:
                     bbox.reproject(4326)
                     self.extent_4326 = self.__extent_convert(bbox.extent, 'lon', 'lat')
-            
+
             # create dictionary for resolution metadata depending on CRS characteristics
             resolution_keys = ('x', 'y') if self.is_projected else ('longitude', 'latitude')
             self.resolution = dict(zip(resolution_keys, (self.xres, self.yres)))
-            
+
             # check whether the data type is supported
             pattern = '(?:(?:u|)int(?:8|16|32|64)|float(?:32|64))'
             if not re.search(pattern, self.dtype):
                 raise ValueError('unsupported data type {}'.format(self.dtype))
-            
+
             # determine the dataset units
             if isinstance(units, str):
                 units = units
@@ -134,7 +134,7 @@ class Dataset(object):
                     raise KeyError("parameter 'units' does not contain key '{}'".format(self.polarization))
             else:
                 raise TypeError("parameter 'units' must be of type str or dict")
-            
+
             # create the measurement entry from collected metadata;
             # this is intended for easy access by class Product
             self.measurements = {self.polarization: {'dtype': self.dtype,
@@ -144,13 +144,13 @@ class Dataset(object):
                                                      'units': units}}
         else:
             raise TypeError('filename must be of type str, list or Dataset')
-    
+
     def __add__(self, dataset):
         """
         override the + operator. This is intended to easily combine two Dataset objects, which were
         created from different files belonging to the same measurement, e.g. two GeoTiffs with one polarization
         each.
-        
+
         Parameters
         ----------
         dataset: Dataset
@@ -170,11 +170,11 @@ class Dataset(object):
                 raise RuntimeError('only different measurements can be combined to one dataset')
         self.measurements.update(dataset.measurements)
         return self
-    
+
     def __radd__(self, dataset):
         """
         similar to :meth:`Dataset.__add__` but for function :func:`sum`, e.g. :code:`sum([Dataset1, Dataset2])`
-        
+
         Parameters
         ----------
         dataset: Dataset
@@ -189,13 +189,13 @@ class Dataset(object):
             return self
         else:
             return self.__add__(dataset)
-    
+
     @staticmethod
     def __extent_convert(extent, xkey, ykey):
         """
         convert the extent of a :class:`~spatialist.raster.Raster` object to a
         datacube-compliant dictionary.
-        
+
         Parameters
         ----------
         extent: dict
@@ -218,17 +218,17 @@ class Dataset(object):
                        ykey: extent['ymax']},
                 'ur': {xkey: extent['xmax'],
                        ykey: extent['ymax']}}
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-    
+
     def __get_measurement_attr(self, attr):
         """
         get a certain measurement attribute from all measurements
-        
+
         Parameters
         ----------
         attr: str
@@ -240,45 +240,45 @@ class Dataset(object):
             a dictionary with the measurement names as keys and the respective attribute as value
         """
         return dict([(key, self.measurements[key][attr]) for key in self.measurements.keys()])
-    
+
     @property
     def filenames(self):
         """
-        
+
         Returns
         -------
         dict
             all file names registered in the dataset
         """
         return self.__get_measurement_attr('filename')
-    
+
     @property
     def identifier(self):
         """
-        
+
         Returns
         -------
         str
             a unique dataset identifier
         """
         return '{}_{}'.format(self.outname_base, '_'.join(self.proc_steps))
-    
+
     @property
     def units(self):
         """
-        
+
         Returns
         -------
         dict
             all measurement unit names registered in the dataset
         """
         return self.__get_measurement_attr('units')
-    
+
     @units.setter
     def units(self, value):
         """
         (re)set the units of all measurements
-        
+
         Parameters
         ----------
         value: str or dict
@@ -302,7 +302,7 @@ class Dataset(object):
                     self.measurements[name]['units'] = unit
                 else:
                     raise KeyError("the dataset does not contain a measurement '{}'".format(name))
-    
+
     def close(self):
         return
 
@@ -310,7 +310,7 @@ class Dataset(object):
 class Product(object):
     """
     A class for describing an ODC product definition
-    
+
     Parameters
     ----------
     definition: str, list, None
@@ -326,10 +326,10 @@ class Product(object):
     """
     def __init__(self, definition=None, name=None, product_type=None,
                  description=None):
-        
+
         missing_message = "when initializing {}, parameters " \
                           "'name', 'product_type' and 'description' must be defined"
-        
+
         if isinstance(definition, str):
             if os.path.isfile(definition):
                 with open(definition, 'r') as yml:
@@ -339,7 +339,7 @@ class Product(object):
                         raise RuntimeError('the provided file does not seem to be a YAML file')
             else:
                 raise RuntimeError('definition file does not exist')
-        
+
         elif isinstance(definition, list):
             if None in [name, product_type, description]:
                 raise ValueError(missing_message.format(' a product from list'))
@@ -347,23 +347,23 @@ class Product(object):
             for dataset in definition:
                 with Dataset(dataset) as DS:
                     self.add(DS)
-        
+
         elif definition is None:
             if None in [name, product_type, description]:
                 raise ValueError(missing_message.format('a blank product'))
             self.__initialize(name, product_type, description)
         else:
             raise TypeError('type of parameter definition must be either str, list or None')
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-    
+
     def __str__(self):
         return yaml.dump(self.meta, default_flow_style=False)
-    
+
     def __getattr__(self, item):
         if item in self.__fixture_storage:
             return self.meta['storage'][item]
@@ -374,7 +374,7 @@ class Product(object):
             return self.meta['metadata']['product_type']
         else:
             return object.__getattribute__(self, item)
-    
+
     def __setattr__(self, key, value):
         if key in self.__fixture_storage:
             self.meta['storage'][key] = value
@@ -385,14 +385,14 @@ class Product(object):
             self.meta['metadata']['product_type'] = value
         else:
             super(Product, self).__setattr__(key, value)
-    
+
     def close(self):
         return
-    
+
     def __add_measurement(self, name, dtype, nodata, units):
         """
         create a new measurement entry
-        
+
         Parameters
         ----------
         name: str
@@ -414,11 +414,11 @@ class Product(object):
                                           'dtype': dtype,
                                           'units': units,
                                           'nodata': nodata})
-    
+
     def __initialize(self, name, product_type, description):
         """
         create a new blank product
-        
+
         Parameters
         ----------
         name: str
@@ -442,62 +442,62 @@ class Product(object):
                      'name': name,
                      'storage': {'crs': None,
                                  'resolution': None}}
-    
+
     @staticmethod
     def __check_dict_keys(keys, reference):
         return len(union(keys, reference)) == len(keys)
-    
+
     @property
     def __fixture_fields(self):
         """
-        
+
         Returns
         -------
         list
             the names of the top-level metadata fields, which must be defined
         """
         return ['description', 'measurements', 'metadata', 'metadata_type', 'name', 'storage']
-    
+
     @property
     def __fixture_measurement(self):
         """
-        
+
         Returns
         -------
         list
             the names of the metadata fields, which must be defined for all measurements
         """
         return ['dtype', 'nodata', 'units']
-    
+
     @property
     def __fixture_metadata(self):
         """
-        
+
         Returns
         -------
         list
             the names of the metadata fields, which must be defined in the general metadata section
         """
         return ['format', 'instrument', 'platform']
-    
+
     @property
     def __fixture_storage(self):
         """
-        
+
         Returns
         -------
         list
             the names of the metadata fields, which must be defined for the storage section
         """
         return ['crs', 'resolution']
-    
+
     def __validate(self):
         """
         assert whether the Product is valid
-        
+
         Returns
         -------
-        
+
         Raises
         ------
         RuntimeError
@@ -511,13 +511,13 @@ class Product(object):
         except AssertionError as e:
             print(e)
             raise RuntimeError('product invalid')
-    
+
     def add(self, dataset):
         """
         Add a dataset to the abstracted product description. This first performs a check
         whether the dataset is compatible with the product and its already existing measurements.
         If a measurement in the dataset does not yet exist in the product description it is added.
-        
+
         Parameters
         ----------
         dataset: Dataset
@@ -530,12 +530,12 @@ class Product(object):
         if not isinstance(dataset, Dataset):
             raise TypeError('input must be of type pyroSAR.datacube.Dataset')
         self.check_integrity(dataset, allow_new_measurements=True)
-        
+
         # set the general product definition attributes if they are None
         for attr in self.__fixture_metadata + self.__fixture_storage:
             if getattr(self, attr) is None:
                 setattr(self, attr, getattr(dataset, attr))
-        
+
         # if it is not yet present, add the dataset measurement definition to that of the product
         for measurement, content in dataset.measurements.items():
             if measurement not in self.measurements.keys():
@@ -543,11 +543,11 @@ class Product(object):
                                        name=content['name'],
                                        nodata=content['nodata'],
                                        units=content['units'])
-    
+
     def check_integrity(self, dataset, allow_new_measurements=False):
         """
         check if a dataset is compatible with the product definition.
-        
+
         Parameters
         ----------
         dataset: Dataset
@@ -559,7 +559,7 @@ class Product(object):
 
         Returns
         -------
-        
+
         Raises
         ------
         RuntimeError
@@ -570,7 +570,7 @@ class Product(object):
             val_prod = getattr(self, attr)
             if val_prod is not None and val_ds != val_prod:
                 raise RuntimeError("mismatch of attribute '{0}': {1}, {2}".format(attr, val_ds, val_prod))
-        
+
         # check measurement fields
         for measurement, content in dataset.measurements.items():
             if measurement not in self.measurements.keys():
@@ -584,14 +584,14 @@ class Product(object):
                         raise RuntimeError("mismatch of measurement '{0}', "
                                            "attribute '{1}': {2}, {3}".
                                            format(measurement, attr, match[attr], content[attr]))
-    
+
     def export_indexing_yml(self, dataset, outdir):
         """
         Write a YML file named {:meth:`Dataset.identifier`}_dcindex.yml, which can be used for indexing a dataset in
         an Open Data Cube. The file will contain information from the product and the dataset and a test is first
         performed to check whether the dataset matches the product definition.
         A unique ID is issued using :func:`uuid.uuid4()`.
-        
+
         Parameters
         ----------
         dataset: Dataset
@@ -603,47 +603,47 @@ class Product(object):
         -------
 
         """
-        
+
         self.__validate()
-        
+
         outname = os.path.join(outdir, dataset.identifier + '_dcindex.yml')
-        
+
         if os.path.isfile(outname):
             raise RuntimeError('indexing YML already exists: \n   {}'.format(outname))
-        
+
         if not os.path.isdir(outdir):
             os.makedirs(outdir)
-        
+
         self.check_integrity(dataset)
         out = {'id': str(uuid.uuid4()),
                'image': {'bands': {}},
                'grid_spatial': {'projection': {}},
                'extent': {'coord': {}},
                'lineage': {'source_datasets': {}}}
-        
+
         for measurement, content in dataset.measurements.items():
             out['image']['bands'][measurement] = {'path': content['filename']}
-        
+
         for attr in self.__fixture_metadata:
             subkey = 'code' if attr == 'platform' else 'name'
             out[attr] = {subkey: getattr(dataset, attr)}
-        
+
         out['grid_spatial']['projection']['geo_ref_points'] = dataset.extent
         out['grid_spatial']['projection']['spatial_reference'] = dataset.crs
-        
+
         out['extent']['coord'] = dataset.extent_4326
         out['extent']['from_dt'] = dataset.from_dt
         out['extent']['to_dt'] = dataset.to_dt
-        
+
         out['product_type'] = self.meta['metadata']['product_type']
-        
+
         with open(outname, 'w') as yml:
             yaml.dump(out, yml, default_flow_style=False)
-    
+
     def export_ingestion_yml(self, outname, product_name, ingest_location):
         """
         Write a YML file, which can be used for ingesting indexed datasets into an Open Data Cube.
-        
+
         Parameters
         ----------
         outname: str
@@ -659,16 +659,16 @@ class Product(object):
         """
         if os.path.isfile(outname):
             raise RuntimeError('product definition YML already exists: \n   {}'.format(outname))
-        
+
         self.__validate()
-        
+
         if product_name == self.meta['name']:
             raise ValueError('source and target product names must be different')
 
         outdir = os.path.dirname(outname)
         if not os.path.isdir(outdir):
             os.makedirs(outdir)
-        
+
         file_path_template = '{0}/{1}_{2}_{3}_{4}_' \
                              '{{tile_index[0]}}_' \
                              '{{tile_index[1]}}_' \
@@ -677,13 +677,13 @@ class Product(object):
                                                         self.instrument,
                                                         self.product_type,
                                                         self.crs.replace('EPSG:', ''))
-        
+
         global_attributes = {'instrument': self.instrument,
                              'platform': self.platform,
                              'institution': 'ESA',
                              'achknowledgment': 'Sentinel-1 data is provided by the European Space Agency '
                                                 'on behalf of the European Commission via download.'}
-        
+
         storage = self.meta['storage']
         storage['driver'] = 'NetCDF CF'
         storage['tile_size'] = {}
@@ -695,12 +695,12 @@ class Product(object):
             storage['chunking'][key] = 500
             storage['chunking'][key] = 500
         storage['dimension_order'] = ['time', 'y', 'x']
-        
+
         measurements = self.meta['measurements']
         for measurement in measurements:
             measurement['resampling_method'] = 'nearest'
             measurement['src_varname'] = measurement['name']
-        
+
         out = {'source_type': self.meta['name'],
                'output_type': product_name,
                'description': self.meta['description'],
@@ -709,37 +709,98 @@ class Product(object):
                'storage': self.meta['storage'],
                'measurements': self.meta['measurements'],
                'global_attributes': global_attributes}
-        
+
         with open(outname, 'w') as yml:
             yaml.dump(out, yml, default_flow_style=False)
-    
+
     @property
     def measurements(self):
         """
-        
+
         Returns
         -------
         dict of dict
             a dictionary with measurement names as keys
         """
         return dict([(x['name'], x) for x in self.meta['measurements']])
-    
+
     def write(self, ymlfile):
         """
         write the product definition to a YML file
-        
+
         Parameters
         ----------
         ymlfile: str
             the file to write to
-        
+
         Returns
         -------
-        
+
         """
         if os.path.isfile(ymlfile):
             raise RuntimeError('ingestion YML already exists: \n   {}'.format(ymlfile))
-        
+
         self.__validate()
         with open(ymlfile, 'w') as yml:
             yaml.dump(self.meta, yml, default_flow_style=False)
+
+
+def makeconfig(dirpath, configname, search_pattern=["S1*_grd_*.tif"]):
+    """
+    This functions allows the automatic generation of a config file for
+    the ESDL datacube from a directory of files which have been stacked using
+    the spatialist stack function.
+    """
+    datasets=finder(dirpath, search_pattern)
+    orbits = []
+    ras = Raster(datasets[1])
+    cols = ras.cols
+    rows = ras.rows
+    resx = round(ras.res[0],7)
+    resy = round(ras.res[1],7)
+    if resx != resy:
+        raise ValueError("The x and y resolution has to be the same")
+    res = resx
+    xmin = ras.geo["xmin"]
+    xmax = ras.geo["xmax"]
+    ymin = ras.geo["ymin"]
+    ymax = ras.geo["ymax"]
+    years=[]
+    orbits=[]
+    for data in datasets:
+        ras = Raster(data)
+        if round(ras.res[0],7) != res or round(ras.res[1],7) != res:
+            raise ValueError("Resolutions are different: {}, {}".format(ras.res, res))
+        if ras.cols != cols:
+            raise ValueError("Number of columns  are different: {}, {}".format(ras.cols, cols))
+        if ras.rows != rows:
+            raise ValueError("Number of rows are different: {},{}".format(ras.rows, rows))
+        meta=parse_datasetname(os.path.basename(data),parse_date=True)
+        print(data)
+        print(meta)
+        print(meta["start"])
+        years.append(meta["start"].year)
+        print(meta["extensions"])
+        orbits.append(meta["extensions"])
+    print(cols, rows, xmin, xmax, ymin, ymax,res)
+    print(set(years))
+    print(set(orbits))
+    startyear=min(years)
+    endyear=max(years)
+    with open(configname, "w") as filehandle:
+        filehandle.write("lon0={}\n".format(xmin))
+        filehandle.write("lon1={}\n".format(xmax))
+        filehandle.write("lat0={}\n".format(ymax))
+        filehandle.write("lat1={}\n".format(ymin))
+        filehandle.write("grid_width={}\n".format(cols))
+        filehandle.write("grid_height={}\n".format(rows))
+        filehandle.write("spatial_res={}\n".format(res))
+        filehandle.write("model_version='2.0.2'\n")
+        filehandle.write("temporal_res=2\n")
+        filehandle.write("start_time =datetime.datetime({}, 1,1,0,0)\n".format(startyear))
+        filehandle.write("end_time   =datetime.datetime({}, 1,1,0,0)\n".format(endyear+1))
+        filehandle.write("ref_time   =datetime.datetime(2014,1,1,0,0)\n")
+        filehandle.write("calendar='gregorian'\n")
+        filehandle.write("file_format='NETCDF4_CLASSIC'\n")
+        filehandle.write("compression=True\n")
+        filehandle.write("chunk_sizes=(365,30,30)\n")
