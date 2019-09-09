@@ -745,7 +745,7 @@ class Product(object):
             yaml.dump(self.meta, yml, default_flow_style=False)
 
 
-def makeconfig(dirpath, configname, search_pattern=["S1*_grd_*.tif"]):
+def makeconfig(dirpath,  cubepath, search_pattern=["S1*_grd_*.tif"], orbsep=False):
     """
     This functions allows the automatic generation of a config file for
     the ESDL datacube from a directory of files which have been stacked using
@@ -766,7 +766,10 @@ def makeconfig(dirpath, configname, search_pattern=["S1*_grd_*.tif"]):
     ymin = ras.geo["ymin"]
     ymax = ras.geo["ymax"]
     years=[]
-    orbits=[]
+    if orbsep:
+        orbits=[]
+    else:
+        orbits=["A", "D"]
     for data in datasets:
         ras = Raster(data)
         if round(ras.res[0],7) != res or round(ras.res[1],7) != res:
@@ -780,13 +783,17 @@ def makeconfig(dirpath, configname, search_pattern=["S1*_grd_*.tif"]):
         print(meta)
         print(meta["start"])
         years.append(meta["start"].year)
-        print(meta["extensions"])
-        orbits.append(meta["extensions"])
+        if orbsep:
+            orbits.append(meta["extensions"])
     print(cols, rows, xmin, xmax, ymin, ymax,res)
     print(set(years))
     print(set(orbits))
     startyear=min(years)
     endyear=max(years)
+
+    configname = cubepath+".config"
+    setup_script = cubepath+".sh"
+
     with open(configname, "w") as filehandle:
         filehandle.write("lon0={}\n".format(xmin))
         filehandle.write("lon1={}\n".format(xmax))
@@ -804,3 +811,13 @@ def makeconfig(dirpath, configname, search_pattern=["S1*_grd_*.tif"]):
         filehandle.write("file_format='NETCDF4_CLASSIC'\n")
         filehandle.write("compression=True\n")
         filehandle.write("chunk_sizes=(365,30,30)\n")
+
+
+    with open(setup_script, "w") as filehandle
+        filehandle.write("#!/usr/bin/bash\n")
+        filehandle.write("DATADIR={}\n".format(os.path.abspath(dirpath)))
+        filehandle.write("cube-gen {0} -c {1}".format(cubepath, configname))
+        inputstring = "sentinel1:dir=$DATADIR:orbit={0}:polarisation={1}"
+        for orbit in orbits:
+            for pol in ["VH", "VV"]
+                filehandle.write(inputstring.format(orbit, pol))
