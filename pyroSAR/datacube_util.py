@@ -752,6 +752,7 @@ def makeconfig(dirpath,  cubepath, search_pattern=["S1*_grd_*.tif"], orbsep=Fals
     the spatialist stack function.
     """
     datasets=finder(dirpath, search_pattern)
+
     orbits = []
     ras = Raster(datasets[1])
     cols = ras.cols
@@ -812,12 +813,13 @@ def makeconfig(dirpath,  cubepath, search_pattern=["S1*_grd_*.tif"], orbsep=Fals
         filehandle.write("compression=True\n")
         filehandle.write("chunk_sizes=(365,30,30)\n")
 
-
-    with open(setup_script, "w") as filehandle
+    orbs=set(orbits)
+    with open(setup_script, "w") as filehandle:
         filehandle.write("#!/usr/bin/bash\n")
         filehandle.write("DATADIR={}\n".format(os.path.abspath(dirpath)))
-        filehandle.write("cube-gen {0} -c {1}".format(cubepath, configname))
-        inputstring = "sentinel1:dir=$DATADIR:orbit={0}:polarisation={1}"
-        for orbit in orbits:
-            for pol in ["VH", "VV"]
+        filehandle.write("cube-gen {0} ".format(cubepath))
+        inputstring = " sentinel1:dir=$DATADIR:orbit={0}:polarisation={1} "
+        for orbit in set(orbits):
+            for pol in ["VH", "VV"]:
                 filehandle.write(inputstring.format(orbit, pol))
+        filehandle.write(" -c {0} ".format(configname))
